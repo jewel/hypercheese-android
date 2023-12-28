@@ -32,6 +32,24 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.launch
 import android.Manifest
+import android.graphics.Outline
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import kotlinx.coroutines.Dispatchers
 import org.json.JSONArray
 import org.json.JSONObject
@@ -41,15 +59,31 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 
+var SERVER : String? = null
+var TOKEN : String? = null
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        val sharedPref = getSharedPreferences("HyperCheese", Context.MODE_PRIVATE)
+        val prevAuth = sharedPref.getBoolean("authenticated", false)
+        if(prevAuth) {
+            SERVER = sharedPref.getString("server", "")
+            TOKEN = sharedPref.getString("token", "")
+        }
 
         setContent {
             HypercheeseUploadTheme {
                 // A surface container using the 'background' color from the theme
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    Greeting("Android")
+                    val authenticated = remember { mutableStateOf(prevAuth) }
+                    if(!authenticated.value)
+                        LoginPage() {
+                            authenticated.value = true
+                        }
+                    else
+                        MainPage()
                 }
             }
         }
@@ -64,31 +98,173 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// A version number to send so that the server can refuse connections from old software
+val API_VERSION = 1
+
 @Composable
-fun Greeting(name: String) {
+fun LoginPage(setAuthenticated: () -> Unit) {
+    val url = remember { mutableStateOf("") }
+    val username = remember { mutableStateOf("") }
+    val password = remember { mutableStateOf("") }
+    val processing = remember { mutableStateOf(false) }
+    val status = remember { mutableStateOf("") }
+    val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val focusRequester = remember { FocusRequester() }
+
+    Column(
+        modifier = Modifier.padding(top = 32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Row {
+            Image(
+                painterResource(id = R.drawable.logo),
+                contentDescription = "Logo",
+                modifier = Modifier.width(36.dp)
+            )
+            Text(
+                text = "HyperCheese Login",
+                style = MaterialTheme.typography.headlineMedium,
+                modifier = Modifier.padding(start=8.dp)
+            )
+        }
+        Spacer(Modifier.height(16.dp))
+        OutlinedTextField(
+            label = { Text("Server URL") },
+            value = url.value,
+            onValueChange = { url.value = it },
+            modifier = Modifier
+                .focusRequester(focusRequester)
+                .onFocusChanged { focusState ->
+                    if(!focusState.isFocused) {
+                        url.value = cleanURL(url.value)
+                    }
+                }
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            label = { Text("Username") },
+            value = username.value,
+            onValueChange = { username.value = it },
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            label = { Text("Password") },
+            value = password.value,
+            onValueChange = { password.value = it },
+            visualTransformation = PasswordVisualTransformation(),
+        )
+        Spacer(Modifier.height(16.dp))
+        Button(
+            enabled = !processing.value,
+            onClick = {
+                processing.value = true
+                status.value = "Authenticating..."
+                coroutineScope.launch(Dispatchers.IO) {
+                    var token: String? = null
+                    try {
+                        token = authenticate(url.value, username.value, password.value)
+                    } catch (e: Exception) {
+                        status.value = e.toString()
+                    }
+                    processing.value = false
+                    if (token != null) {
+                        saveLogin(context, url.value, token)
+                        status.value = "Logged in!"
+                    }
+                }
+            },
+        ) {
+            Text("Login")
+        }
+        if(status.value != "") {
+            Spacer(Modifier.height(8.dp))
+            Text(status.value)
+            if(processing.value) {
+                LinearProgressIndicator()
+            }
+        }
+    }
+}
+
+fun saveLogin(context: Context, url: String, token: String)
+{
+    val sharedPrefs = context.getSharedPreferences("HyperCheese", Context.MODE_PRIVATE)
+    with(sharedPrefs.edit()) {
+        putBoolean("authenticated", true)
+        putString("server", url)
+        putString("token", token)
+        apply()
+    }
+    SERVER = url
+    TOKEN = token
+}
+
+fun cleanURL(input: String) : String {
+    if(input.length == 0)
+        return ""
+    val url = if(!input.contains("://")) "https://$input" else input
+    return url.removeSuffix("/")
+}
+
+fun authenticate(url: String, username: String, password: String): String {
+    var connection : HttpURLConnection? = null
+    try {
+        val url = URL("$url/files/authenticate")
+        connection = url.openConnection() as HttpURLConnection
+        connection.requestMethod = "POST"
+        connection.setRequestProperty("Content-Type", "application/json")
+        connection.doOutput = true
+
+        val obj = JSONObject()
+        obj.put("username", username)
+        obj.put("password", password)
+        obj.put("version", API_VERSION)
+
+        connection.outputStream.write(obj.toString().toByteArray())
+
+        if (connection.responseCode == 200) {
+            val res = JSONObject(connection.inputStream.bufferedReader().readText())
+            return res.getString("token")
+        }
+        throw Exception("Server error: ${connection.responseCode}")
+    }
+    finally {
+        connection?.disconnect()
+    }
+}
+
+@Composable
+fun MainPage() {
+    var statusMessage by remember { mutableStateOf("Status") }
+    var currentProgress by remember { mutableStateOf(0.0f) }
+    val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     Column {
-        var statusMessage by remember { mutableStateOf("Status") }
-        var currentProgress by remember { mutableStateOf(0.0f) }
-        val coroutineScope = rememberCoroutineScope()
-        val context = LocalContext.current
-
         Button(
             onClick = {
                 coroutineScope.launch(Dispatchers.IO) {
-                    statusMessage = "Scanning"
-                    val files = scanForFiles(context) { msg ->
-                        statusMessage = msg
+                    try {
+                        statusMessage = "Scanning"
+                        val files = scanForFiles(context)
+
+                        statusMessage = "Submitting Manifest"
+                        val toHash = postJSON("files/manifest", files)
+                        val hashes = hashFiles(toHash) { msg ->
+                            statusMessage = msg
+                        }
+
+                        statusMessage = "Submitting Hashes"
+                        val toUpload = postJSON("files/hashes", hashes)
+
+                        statusMessage = "Uploading"
+                        uploadFiles(toUpload) { msg ->
+                            statusMessage = msg
+                        }
                     }
-                    statusMessage = "Submitting Manifest"
-                    val toHash = submitManifest(files)
-                    val hashes = hashFiles(toHash) { msg ->
-                        statusMessage = msg
-                    }
-                    statusMessage = "Submitting Hashes"
-                    val toUpload = submitHashes(hashes)
-                    uploadFiles(toUpload) { msg ->
-                        statusMessage = msg
+                    catch(e: Exception) {
+                        statusMessage = e.toString()
                     }
                 }
                 currentProgress += 0.1f
@@ -108,11 +284,8 @@ fun Greeting(name: String) {
         Text(text = statusMessage)
     }
 }
-val server = "http://192.168.86.61:3000"
 
-suspend fun scanForFiles(context: Context, updateStatus: (String) -> Unit): JSONArray {
-    updateStatus("Scanning")
-
+fun scanForFiles(context: Context): JSONArray {
     val res = JSONArray()
     val projection = arrayOf(
         MediaStore.Files.FileColumns.DATA,
@@ -138,36 +311,35 @@ suspend fun scanForFiles(context: Context, updateStatus: (String) -> Unit): JSON
             obj.put("path", it.getString(iData))
             obj.put("mtime", it.getLong(iDate))
             obj.put("size", it.getLong(iSize))
-            updateStatus("Scanning $count of $total")
             res.put(obj)
         }
     }
     return res
 }
 
-suspend fun submitManifest(files: JSONArray): JSONArray {
+fun postJSON(uri: String, input: JSONArray): JSONArray {
     var connection : HttpURLConnection? = null
     try {
-        val url = URL("$server/files/manifest")
+        val url = URL("$SERVER/$uri")
         connection = url.openConnection() as HttpURLConnection
         connection.requestMethod = "POST"
         connection.setRequestProperty("Content-Type", "application/json")
         connection.doOutput = true
 
         // FIXME compress this with gzip or brotli
-        connection.outputStream.write(files.toString().toByteArray())
+        connection.outputStream.write(input.toString().toByteArray())
 
         if (connection.responseCode == 200) {
             return JSONArray(connection.inputStream.bufferedReader().readText())
         }
-        throw Exception("Server error")
+        throw Exception("Server error: ${connection.responseCode}")
     }
     finally {
         connection?.disconnect()
     }
 }
 
-suspend fun hashFiles(files: JSONArray, updateStatus: (String) -> Unit): JSONArray {
+fun hashFiles(files: JSONArray, updateStatus: (String) -> Unit): JSONArray {
     val res = JSONArray()
     for(i in 0 until files.length()) {
         val info = files.getJSONObject(i)
@@ -189,35 +361,14 @@ suspend fun hashFiles(files: JSONArray, updateStatus: (String) -> Unit): JSONArr
     }
     return res
 }
-
-suspend fun submitHashes(files: JSONArray): JSONArray {
-    var connection : HttpURLConnection? = null
-    try {
-        val url = URL("$server/files/hashes")
-        connection = url.openConnection() as HttpURLConnection
-        connection.requestMethod = "POST"
-        connection.setRequestProperty("Content-Type", "application/json")
-        connection.doOutput = true
-
-        connection.outputStream.write(files.toString().toByteArray())
-
-        if (connection.responseCode == 200) {
-            return JSONArray(connection.inputStream.bufferedReader().readText())
-        }
-        throw Exception("Server error")
-    }
-    finally {
-        connection?.disconnect()
-    }
-}
-
-suspend fun uploadFiles(files: JSONArray, updateStatus: (String) -> Unit) {
+fun uploadFiles(files: JSONArray, updateStatus: (String) -> Unit) {
     for(i in 0 until files.length()) {
         val info = files.getJSONObject(i)
         val path = info.getString("path")
         val file = File(path)
+        updateStatus("Uploading $path")
         val input = file.inputStream()
-        val url = URL("$server/files")
+        val url = URL("$SERVER/files")
         val connection = url.openConnection() as HttpURLConnection
         connection.requestMethod = "PUT"
         connection.setRequestProperty("Content-Type", "application/octet-stream")
@@ -237,13 +388,5 @@ suspend fun uploadFiles(files: JSONArray, updateStatus: (String) -> Unit) {
         } else {
             // TODO handle error
         }
-    }
-}
-
-    @Preview(showBackground = true)
-@Composable
-fun GreetingPreview() {
-    HypercheeseUploadTheme {
-        Greeting("Android")
     }
 }
