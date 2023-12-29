@@ -10,6 +10,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -17,12 +22,24 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun PermissionPage(permissionGranted: () -> Unit)
 {
+    var target by remember { mutableStateOf("") }
+    var imagePermission by remember { mutableStateOf(false) }
+    var videoPermission by remember { mutableStateOf(false) }
+
     val requestPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { isGranted: Boolean ->
-        if(isGranted)
+    ) { isGranted ->
+        if(target == "images")
+            imagePermission = isGranted
+        if(target == "video")
+            videoPermission = isGranted
+    }
+
+    LaunchedEffect(imagePermission, videoPermission) {
+        if(imagePermission && videoPermission)
             permissionGranted()
     }
+
     Column(
         modifier = Modifier.padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -33,7 +50,14 @@ fun PermissionPage(permissionGranted: () -> Unit)
         Spacer(Modifier.height(16.dp))
         Button(
             onClick = {
-                requestPermission.launch(Manifest.permission.READ_MEDIA_IMAGES)
+                if(!imagePermission) {
+                    target = "images"
+                    requestPermission.launch(Manifest.permission.READ_MEDIA_IMAGES)
+                }
+                else if(!videoPermission) {
+                    target = "video"
+                    requestPermission.launch(Manifest.permission.READ_MEDIA_VIDEO)
+                }
             }
         ) {
             Text("Grant Permission")

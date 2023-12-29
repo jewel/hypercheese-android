@@ -28,6 +28,7 @@ class MainActivity : ComponentActivity() {
             TOKEN = sharedPref.getString("token", "")
         }
         val prevPerm = checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
+                && checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
 
         setContent {
             HypercheeseUploadTheme {

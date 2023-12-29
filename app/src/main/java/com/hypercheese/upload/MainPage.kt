@@ -1,6 +1,7 @@
 package com.hypercheese.upload
 
 import android.content.Context
+import android.net.Uri
 import android.provider.MediaStore
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -192,37 +193,52 @@ fun rememberSharedPreference (key: String, default: Boolean) : MutableState<Bool
     return memorable
 }
 
-fun scanForFiles(context: Context): JSONArray {
-    val res = JSONArray()
-    val projection = arrayOf(
-        MediaStore.Files.FileColumns.DATA,
-        MediaStore.Files.FileColumns.DATE_MODIFIED,
-        MediaStore.Files.FileColumns.SIZE
-    )
+fun readMedia(context: Context, contentUri: Uri, projection: Array<String>, result: JSONArray) {
+    val selection = "${projection[0]} LIKE ?"
+
     val cursor = context.contentResolver.query(
-        MediaStore.Files.getContentUri("external"),
+        contentUri,
         projection,
         null,
         null,
         null
     )
     cursor?.use {
-        val iData = it.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DATA)
-        val iDate = it.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DATE_MODIFIED)
-        val iSize = it.getColumnIndexOrThrow(MediaStore.Files.FileColumns.SIZE)
-        var count = 0
-        val total = cursor.count
-        while(it.moveToNext()) {
-            count++
+        val iData = it.getColumnIndexOrThrow(projection[0])
+        val iDate = it.getColumnIndexOrThrow(projection[1])
+        val iSize = it.getColumnIndexOrThrow(projection[2])
+
+        while (it.moveToNext()) {
             val obj = JSONObject()
             obj.put("path", it.getString(iData))
             obj.put("mtime", it.getLong(iDate))
             obj.put("size", it.getLong(iSize))
-            res.put(obj)
+            result.put(obj)
         }
     }
-    return res
 }
+
+fun scanForFiles(context: Context) : JSONArray {
+    val videoProjection = arrayOf(
+        MediaStore.Video.Media.DATA,
+        MediaStore.Video.Media.DATE_MODIFIED,
+        MediaStore.Video.Media.SIZE
+    )
+    val videoUri = MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
+
+    val imageProjection = arrayOf(
+        MediaStore.Images.Media.DATA,
+        MediaStore.Images.Media.DATE_MODIFIED,
+        MediaStore.Images.Media.SIZE
+    )
+    val imageUri = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
+
+    val result = JSONArray()
+    readMedia(context, videoUri, videoProjection, result)
+    readMedia(context, imageUri, imageProjection, result)
+    return result
+}
+
 
 fun pluralize(count: Int, name: String) : String {
     if(count == 1)
