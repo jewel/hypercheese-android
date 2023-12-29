@@ -48,7 +48,7 @@ fun postJSON(uri: String, input: JSONArray): JSONArray {
     }
 }
 
-suspend fun uploadFiles(context: Context, files: JSONArray, updateStatus: (Float, String) -> Unit) {
+suspend fun uploadFiles(context: Context, files: JSONArray, updateStatus: (Float, String) -> Unit, isActive: () -> Boolean) {
     val total = addSizes(files)
     var uploaded = 0L
     var uploadedFiles = 0
@@ -72,6 +72,7 @@ suspend fun uploadFiles(context: Context, files: JSONArray, updateStatus: (Float
         connection.setRequestProperty("Content-Type", "application/octet-stream")
         connection.setRequestProperty("Authorization", "Bearer $TOKEN")
         connection.setRequestProperty("X-Path", path)
+        connection.setRequestProperty("X-MTime", file.lastModified().toString())
         connection.setRequestProperty("X-API-Version", API_VERSION)
         connection.setFixedLengthStreamingMode(file.length())
         val out = BufferedOutputStream(connection.outputStream)
@@ -82,6 +83,10 @@ suspend fun uploadFiles(context: Context, files: JSONArray, updateStatus: (Float
             uploaded += bytesRead
             val progress = uploaded.toFloat() / total.toFloat()
             updateStatus(progress, "Uploaded ${pluralize(uploadedFiles, "file")}, ${humanize(uploaded)} of ${humanize(total)}")
+            if(!isActive()) {
+                connection.disconnect()
+                throw Exception("Cancelled")
+            }
         }
         out.flush()
         input.close()

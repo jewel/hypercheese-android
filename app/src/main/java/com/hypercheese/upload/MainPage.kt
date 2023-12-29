@@ -2,6 +2,7 @@ package com.hypercheese.upload
 
 import android.content.Context
 import android.net.Uri
+import android.os.Environment
 import android.provider.MediaStore
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -30,6 +31,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -46,6 +49,7 @@ fun MainPage() {
     var uploadStatus by remember { mutableStateOf("") }
     var uploadProgress by remember { mutableStateOf(0f) }
     var toUpload by remember { mutableStateOf(JSONArray()) }
+    var uploadJob by remember { mutableStateOf<Job?>(null) }
 
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -57,7 +61,7 @@ fun MainPage() {
             coroutineScope.launch(Dispatchers.IO) {
                 isRefreshing = true
                 try {
-                    toUpload = refresh(context) { s, p, h ->
+                    toUpload = refresh { s, p, h ->
                         scanStatus = s
                         hashProgress = p
                         hashStatus = h
@@ -119,13 +123,18 @@ fun MainPage() {
             Button(
                 enabled = !isRefreshing && toUpload.length() > 0,
                 onClick = {
-                    coroutineScope.launch(Dispatchers.IO) {
+                   uploadJob = coroutineScope.launch(Dispatchers.IO) {
                         isUploading = true
                         try {
-                            uploadFiles(context, toUpload) { p, m ->
-                                uploadProgress = p
-                                uploadStatus = m
-                            }
+                            uploadFiles(context, toUpload,
+                                { p, m ->
+                                    uploadProgress = p
+                                    uploadStatus = m
+                                },
+                                {
+                                    isActive
+                                }
+                            )
                             toUpload = JSONArray()
                             hashStatus = buildFinalHashStatus(toUpload)
                         }
@@ -142,6 +151,8 @@ fun MainPage() {
         else {
             OutlinedButton(
                 onClick = {
+                    uploadJob?.cancel()
+                    isUploading = false
                 },
             ) {
                 Text("Cancel")
@@ -150,12 +161,12 @@ fun MainPage() {
 
         Spacer(Modifier.height(16.dp))
 
+        Text(uploadStatus)
         if( isUploading ) {
             LinearProgressIndicator(
                 progress = uploadProgress
             )
         }
-        Text(uploadStatus)
     }
 }
 
@@ -218,7 +229,7 @@ fun readMedia(context: Context, contentUri: Uri, projection: Array<String>, resu
     }
 }
 
-fun scanForFiles(context: Context) : JSONArray {
+fun scanFilesOld(context: Context) : JSONArray {
     val videoProjection = arrayOf(
         MediaStore.Video.Media.DATA,
         MediaStore.Video.Media.DATE_MODIFIED,
@@ -237,6 +248,28 @@ fun scanForFiles(context: Context) : JSONArray {
     readMedia(context, videoUri, videoProjection, result)
     readMedia(context, imageUri, imageProjection, result)
     return result
+}
+
+fun searchDirectory(dir: File, list: JSONArray) {
+    val files = dir.listFiles()
+    files?.forEach { file ->
+        if (file.isDirectory) {
+            searchDirectory(file, list)
+        } else {
+            val obj = JSONObject()
+            obj.put("path", file.canonicalPath)
+            obj.put("mtime", file.lastModified())
+            obj.put("size", file.length())
+            list.put(obj)
+        }
+    }
+}
+
+fun scanFiles() : JSONArray {
+    val dcim = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM)
+    val res = JSONArray()
+    searchDirectory(dcim, res)
+    return res
 }
 
 
@@ -294,9 +327,9 @@ fun buildFinalHashStatus(files: JSONArray) : String {
     return "To upload: ${pluralize(count, "file")}, ${humanize(size)}"
 }
 
-fun refresh(context: Context, updateStatus: (String, Float, String) -> Unit) : JSONArray {
+fun refresh(updateStatus: (String, Float, String) -> Unit) : JSONArray {
     updateStatus("Scanning", 0f, "")
-    val files = scanForFiles(context)
+    val files = scanFiles()
     val scanStatus = buildScanStatus(files)
     updateStatus(scanStatus, 0.01f, "Conferring with Server")
 
